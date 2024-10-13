@@ -22,19 +22,20 @@
 
 namespace MediaWiki\Extension\Collection;
 
-use MediaWiki\Hook\OutputPageCheckLastModifiedHook;
+use HtmlArmor;
+use MediaWiki\Context\RequestContext;
 use MediaWiki\Hook\SidebarBeforeOutputHook;
 use MediaWiki\Hook\SiteNoticeAfterHook;
+use MediaWiki\Html\Html;
 use MediaWiki\Html\TemplateParser;
-use MediaWiki\Linker\Linker;
 use MediaWiki\MainConfigNames;
+use MediaWiki\MediaWikiServices;
+use MediaWiki\Output\Hook\OutputPageCheckLastModifiedHook;
 use MediaWiki\Output\OutputPage;
 use MediaWiki\Session\SessionManager;
 use MediaWiki\SpecialPage\SpecialPage;
 use MediaWiki\Title\Title;
-use RequestContext;
 use Skin;
-use Xml;
 
 class Hooks implements
 	SidebarBeforeOutputHook,
@@ -65,27 +66,18 @@ class Hooks implements
 	}
 
 	/**
-	 * Return HTML-code to be inserted as portlet
-	 *
-	 * @param Skin $sk
-	 *
-	 * @return array[]|false
+	 * Determinte if the portlet should be shown.
 	 */
-	public static function getPortlet( $sk ) {
-		global $wgCollectionArticleNamespaces;
-		global $wgCollectionFormats;
-		global $wgCollectionPortletFormats;
-
+	protected static function shouldShowPortlet( Skin $sk ): bool {
 		$title = $sk->getTitle();
-
 		if ( $title === null || !$title->exists() ) {
 			return false;
 		}
 
 		$namespace = $title->getNamespace();
-
-		if ( !in_array( $namespace, $wgCollectionArticleNamespaces )
-			&& $namespace != NS_CATEGORY ) {
+		$collNS = $sk->getConfig()->get( 'CollectionArticleNamespaces' );
+		if ( !in_array( $namespace, $collNS )
+			 && $namespace != NS_CATEGORY ) {
 			return false;
 		}
 
@@ -93,14 +85,18 @@ class Hooks implements
 		if ( $action != 'view' && $action != 'purge' ) {
 			return false;
 		}
+		return true;
+	}
 
-		$out = [];
-
-		$booktitle = SpecialPage::getTitleFor( 'Book' );
+	/**
+	 * Return HTML-code for the session switch (turning book creation on or off).
+	 */
+	protected static function getSessionSwitch( Skin $sk, Title $title, Title $booktitle ): array {
+        $out = [];
 		if ( !Session::isEnabled() ) {
 			if ( !$sk->getConfig()->get( 'CollectionDisableSidebarLink' ) ) {
 				$out[] = [
-					'text' => $sk->msg( 'coll-create_a_book' )->escaped(),
+					'text' => $sk->msg( 'coll-create_a_book' )->text(),
 					'id' => 'coll-create_a_book',
 					'href' => $booktitle->getLocalURL(
 						[ 'bookcmd' => 'book_creator', 'referer' => $title->getPrefixedText() ]
@@ -119,7 +115,13 @@ class Hooks implements
 				),
 			];
 		}
+		return $out;
+	}
 
+	/**
+	 * Returns the initial parameters for link building.
+	 */
+	protected static function initializeParams( Skin $sk, Title $title ): array {
 		$params = [
 			'bookcmd' => 'render_article',
 			'arttitle' => $title->getPrefixedText(),
@@ -133,23 +135,44 @@ class Hooks implements
 			$params['oldid'] = $title->getLatestRevID();
 		}
 
-		foreach ( $wgCollectionPortletFormats as $writer ) {
+		return $params;
+	}
+
+	/**
+	 * Return HTML-code to be inserted as portlet
+	 *
+	 * @param Skin $sk
+	 *
+	 * @return array[]|false
+	 */
+	public static function getPortlet( $sk ) {
+		if ( !self::shouldShowPortlet( $sk ) ) {
+			return false;
+		}
+
+		$title = $sk->getTitle();
+		$booktitle = SpecialPage::getTitleFor( 'Book' );
+		$out = self::getSessionSwitch($sk, $title, $booktitle);
+
+		$params = self::initializeParams( $sk, $title );
+
+		$collFormats = $sk->getConfig()->get( 'CollectionFormats' );
+		$collPortletFormats = $sk->getConfig()->get( 'CollectionPortletFormats' );
+		foreach ( $collPortletFormats as $writer ) {
 			$params['writer'] = $writer;
 			$out[] = [
-				'text' => $sk->msg( 'coll-download_as', $wgCollectionFormats[$writer] )->escaped(),
+				'text' => $sk->msg( 'coll-download_as', $collFormats[$writer] )->escaped(),
 				'id' => 'coll-download-as-' . $writer,
 				'href' => $booktitle->getLocalURL( $params ),
 			];
 		}
 
 		// Move the 'printable' link into our section for consistency
-		if ( $action == 'view' || $action == 'purge' ) {
-			if ( !$sk->getOutput()->isPrintable() ) {
-				$out[] = [ 'text' => $sk->msg( 'printableversion' )->text(),
-					'id' => 't-print',
-					'href' => $title->getLocalURL( [ 'printable' => 'yes' ] )
-				];
-			}
+		if ( !$sk->getOutput()->isPrintable() ) {
+			$out[] = [ 'text' => $sk->msg( 'printableversion' )->text(),
+					   'id' => 't-print',
+					   'href' => $title->getLocalURL( [ 'printable' => 'yes' ] )
+			];
 		}
 
 		return $out;
@@ -280,9 +303,9 @@ class Hooks implements
 		$ptext = $title->getPrefixedText();
 
 		if ( $hint == 'suggest' || $hint == 'showbook' ) {
-			return Xml::tags( 'span',
+			return Html::rawElement( 'span',
 				[ 'style' => 'color: #777;' ],
-				Xml::element( 'img',
+				Html::element( 'img',
 					[
 						'src' => "$imagePath/disabled.png",
 						'alt' => '',
@@ -305,7 +328,7 @@ class Hooks implements
 				"mw.config.get('wgTitle')]); return false;";
 		} else {
 			$collectionArgsJs = "mw.config.get('wgNamespaceNumber'), mw.config.get('wgTitle'), " .
-				Xml::encodeJsVar( $oldid );
+				Html::encodeJsVar( $oldid );
 			if ( $hint == 'addarticle'
 				|| ( $hint == '' && Session::findArticle( $ptext, $oldid ) == -1 ) ) {
 				$id = 'coll-add_article';
@@ -324,9 +347,11 @@ class Hooks implements
 			}
 		}
 
-		return Linker::linkKnown(
+		$linkRenderer = MediaWikiServices::getInstance()->getLinkRenderer();
+
+		return $linkRenderer->makeKnownLink(
 			SpecialPage::getTitleFor( 'Book' ),
-			Xml::element( 'img',
+			new HtmlArmor( Html::element( 'img',
 				[
 					'src' => "$imagePath/$icon",
 					'alt' => '',
@@ -334,7 +359,7 @@ class Hooks implements
 					'height' => '16',
 				]
 			)
-			. '&#160;' . wfMessage( $captionMsg )->escaped(),
+			. '&#160;' . wfMessage( $captionMsg )->escaped() ),
 			[
 				'id' => $id,
 				'rel' => 'nofollow',
@@ -354,11 +379,11 @@ class Hooks implements
 		$numArticles = Session::countArticles();
 
 		if ( $hint == 'showbook' ) {
-			return Xml::tags( 'strong',
+			return Html::rawElement( 'strong',
 				[
 					'class' => 'collection-creatorbox-iconlink',
 				],
-				Xml::element( 'img',
+				Html::element( 'img',
 					[
 						'src' => "$imagePath/silk-book_open.png",
 						'alt' => '',
@@ -370,9 +395,11 @@ class Hooks implements
 				. ' (' . wfMessage( 'coll-n_pages' )->numParams( $numArticles )->escaped() . ')'
 			); // @todo FIXME: Hard coded parentheses.
 		} else {
-			return Linker::linkKnown(
+			$linkRenderer = MediaWikiServices::getInstance()->getLinkRenderer();
+
+			return $linkRenderer->makeKnownLink(
 				SpecialPage::getTitleFor( 'Book' ),
-				Xml::element( 'img',
+				new HtmlArmor( Html::element( 'img',
 					[
 						'src' => "$imagePath/silk-book_open.png",
 						'alt' => '',
@@ -381,13 +408,13 @@ class Hooks implements
 					]
 				)
 				. '&#160;' . wfMessage( 'coll-show_collection' )->escaped()
-					. ' (' . wfMessage( 'coll-n_pages' )->numParams( $numArticles )->escaped() . ')',
+				. ' (' . wfMessage( 'coll-n_pages' )->numParams( $numArticles )->escaped() . ')' ), // @todo FIXME: Hard coded parentheses.
 				[
 					'rel' => 'nofollow',
 					'title' => wfMessage( 'coll-show_collection_tooltip' )->text(),
 					'class' => 'collection-creatorbox-iconlink',
 				]
-			); // @todo FIXME: Hard coded parentheses.
+			);
 		}
 	}
 
@@ -402,11 +429,11 @@ class Hooks implements
 		}
 
 		if ( $hint == 'suggest' ) {
-			return Xml::tags( 'strong',
+			return Html::rawElement( 'strong',
 				[
 					'class' => 'collection-creatorbox-iconlink',
 				],
-				Xml::element( 'img',
+				Html::element( 'img',
 					[
 						'src' => "$imagePath/silk-wand.png",
 						'alt' => '',
@@ -418,9 +445,11 @@ class Hooks implements
 				. '&#160;' . wfMessage( 'coll-make_suggestions' )->escaped()
 			);
 		} else {
-			return Linker::linkKnown(
+			$linkRenderer = MediaWikiServices::getInstance()->getLinkRenderer();
+
+			return $linkRenderer->makeKnownLink(
 				SpecialPage::getTitleFor( 'Book' ),
-				Xml::element( 'img',
+				new HtmlArmor( Html::element( 'img',
 					[
 						'src' => "$imagePath/silk-wand.png",
 						'alt' => '',
@@ -429,7 +458,7 @@ class Hooks implements
 						'style' => 'vertical-align: text-bottom',
 					]
 				)
-				. '&#160;' . wfMessage( 'coll-make_suggestions' )->escaped(),
+				. '&#160;' . wfMessage( 'coll-make_suggestions' )->escaped() ),
 				[
 					'rel' => 'nofollow',
 					'title' => wfMessage( 'coll-make_suggestions_tooltip' )->text(),

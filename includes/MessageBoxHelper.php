@@ -57,6 +57,11 @@ class MessageBoxHelper {
 	 * @return string Generated HTML
 	 */
 	public static function renderWarningBoxes() {
+		global $wgCollectionDisableDownloadSection;
+		if ( !$wgCollectionDisableDownloadSection ) {
+			return "";
+		}
+
 		return Html::noticeBox(
 			Html::element( 'h5', [
 				'class' => 'collection-box-heading collection-icon-info',
