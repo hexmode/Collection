@@ -68,15 +68,15 @@
 		 * @param {string} submodule Can either be "addarticle", "removearticle"
 		 *   or "addcategory".
 		 * @param {number} namespace
-		 * @param {string} title
+		 * @param {string} colltitle
 		 * @param {number} [oldId]
 		 */
-		function collectionCall( submodule, namespace, title, oldId ) {
+		function collectionCall( submodule, namespace, colltitle, oldId ) {
 			var params = {
 				action: 'collection',
 				submodule: submodule,
 				namespace: namespace,
-				title: title,
+				title: colltitle,
 				oldid: oldId,
 				format: 'json'
 			};
@@ -127,14 +127,14 @@
 		 * Add or Remove article from user's collection.
 		 *
 		 * @param {string} action "add" or "remove" actions
-		 * @param {string} title
+		 * @param {string} arttitle
 		 */
-		function addremove_article( action, title ) {
+		function addremove_article( action, arttitle ) {
 			var params = {
 				action: 'collection',
 				submodule: action === 'add' ? 'addarticle' : 'removearticle',
 				namespace: 0,
-				title: title,
+				title: arttitle,
 				oldid: 0,
 				format: 'json'
 			};

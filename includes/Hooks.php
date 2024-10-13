@@ -119,15 +119,42 @@ class Hooks implements
 	}
 
 	/**
+	 * Check if this is a collection namespace or pseudo namespace.
+	 */
+	protected static function isCollectionNS( Skin $sk, Title $title ): bool {
+		$namespace = $title->getNamespace();
+		$collNS = $sk->getConfig()->get( 'CommunityCollectionNamespace' );
+		if ( $namespace === $collNS ) {
+			return true;
+		}
+		if ( $namespace == NS_USER ) {
+			$username = $title->getRootText();
+			$fullText = $title->getText();
+			$subPageSection = '/' . wfMessage( 'coll-collections' )->inContentLanguage()->text() . '/';
+			if ( strpos( $fullText, $username . $subPageSection ) === 0 ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
 	 * Returns the initial parameters for link building.
 	 */
 	protected static function initializeParams( Skin $sk, Title $title ): array {
-		$params = [
-			'bookcmd' => 'render_article',
-			'arttitle' => $title->getPrefixedText(),
-			'returnto' => $title->getPrefixedText(),
-		];
-
+		if ( self::isCollectionNS( $sk, $title ) ) {
+			$params = [
+				'bookcmd' => 'render_collection',
+				'colltitle' => $title->getPrefixedText(),
+				'returnto' => $title->getPrefixedText(),
+			];
+		} else {
+			$params = [
+				'bookcmd' => 'render_article',
+				'arttitle' => $title->getPrefixedText(),
+				'returnto' => $title->getPrefixedText(),
+			];
+		}
 		$oldid = $sk->getRequest()->getVal( 'oldid' );
 		if ( $oldid ) {
 			$params['oldid'] = $oldid;
@@ -160,8 +187,12 @@ class Hooks implements
 		$collPortletFormats = $sk->getConfig()->get( 'CollectionPortletFormats' );
 		foreach ( $collPortletFormats as $writer ) {
 			$params['writer'] = $writer;
+			$dlMsg = 'coll-download_as';
+			if ( self::isCollectionNS( $sk, $title ) ) {
+				$dlMsg = 'coll-download_book_as';
+			}
 			$out[] = [
-				'text' => $sk->msg( 'coll-download_as', $collFormats[$writer] )->escaped(),
+				'text' => $sk->msg( $dlMsg, $collFormats[$writer] )->text(),
 				'id' => 'coll-download-as-' . $writer,
 				'href' => $booktitle->getLocalURL( $params ),
 			];

@@ -36,6 +36,7 @@ use MediaWiki\Extension\Collection\Templates\CollectionRenderingTemplate;
 use MediaWiki\Extension\Collection\Templates\CollectionSaveOverwriteTemplate;
 use MediaWiki\Html\Html;
 use MediaWiki\MediaWikiServices;
+use MediaWiki\Message\Message;
 use MediaWiki\Request\DerivativeRequest;
 use MediaWiki\Request\WebRequest;
 use MediaWiki\SpecialPage\SpecialPage;
@@ -301,15 +302,34 @@ class SpecialCollection extends SpecialPage {
 				return;
 
 			case 'render_collection':
+				$downloadDisabled = $this->getConfig()->get( 'CollectionDisableDownloadSection' );
+				if ( $downloadDisabled ) {
+					$out->prepareErrorPage();
+					$out->setPageTitleMsg( new Message( 'coll-download-disabled-title' ) );
+					$out->addHTML( MessageBoxHelper::renderWarningBoxes() );
+					return;
+				}
 				$title = Title::newFromText( $request->getVal( 'colltitle', '' ) );
 				if ( !$title ) {
+					$out->prepareErrorPage();
+					$out->setPageTitleMsg( new Message( 'coll-missing-param-title' ) );
+					$out->addHTML( Html::element(
+						"div", [ "class" => "error" ], $this->msg( 'coll-missing-param-colltitle' )->text()
+					) );
 					return;
 				}
 				$collection = $this->loadCollection( $title );
-				if ( $collection ) {
-					$this->applySettings( $collection, $request );
-					$this->renderCollection( $collection, $title, $request->getVal( 'writer', 'rl' ) );
+				if ( !$collection ) {
+					$out->prepareErrorPage();
+					$out->setPageTitleMsg( new Message( 'coll-no-collection-title' ) );
+					$out->addHTML( Html::element(
+						"div", [ "class" => "error" ], $this->msg( 'coll-no-collection' )->text()
+					) );
+					return;
 				}
+
+				$this->applySettings( $collection, $request );
+				$this->renderCollection( $collection, $title, $request->getVal( 'writer', 'rl' ) );
 				return;
 
 			case 'post_zip':
@@ -1351,11 +1371,10 @@ class SpecialCollection extends SpecialPage {
 	 * @param WebRequest &$request
 	 */
 	private function applySettings( &$collection, &$request ) {
-		global $wgCollectionRendererSettings;
 		if ( !isset( $collection['settings'] ) ) {
 			$collection['settings'] = [];
 		}
-		foreach ( $wgCollectionRendererSettings as $key => $desc ) {
+		foreach ( $this->getConfig()->get( "CollectionRendererSettings" ) as $key => $desc ) {
 			if ( $desc['type'] != 'select' ) {
 				continue;
 			}
