@@ -45,9 +45,10 @@ use OOUI\ButtonGroupWidget;
 use OOUI\ButtonInputWidget;
 use OOUI\ButtonWidget;
 use OOUI\FormLayout;
-use RequestContext;
-use SkinTemplate;
+use MediaWiki\Context\RequestContext;
+use MediaWiki\Skin\SkinComponentUtils;
 use UnexpectedValueException;
+use Wikimedia\Services\NoSuchServiceException;
 
 class SpecialCollection extends SpecialPage {
 
@@ -56,6 +57,12 @@ class SpecialCollection extends SpecialPage {
 
 	/** @var false|array[] */
 	private $mPODPartners;
+
+	/** @var DisplayTitleService */
+	private $displayTitleService = null;
+
+	/** @var urlUtils */
+	private $urlUtils;
 
 	/**
 	 * @param false|array[] $PODPartners
@@ -68,6 +75,18 @@ class SpecialCollection extends SpecialPage {
 		} else {
 			$this->mPODPartners = $wgCollectionPODPartners;
 		}
+		$this->setupServices();
+	}
+
+	private function setupServices() {
+		wfDebugLog("collection", "setting up");
+		$mwInst = MediaWikiServices::getInstance();
+		try {
+			$this->displayTitleService = $mwInst->getService( "DisplayTitleService" );
+		} catch( NoSuchServiceException ) {
+			wfDebugLog("collection", "No title");
+		}
+		$this->urlUtils = $mwInst->getUrlUtils();
 	}
 
 	public function doesWrites() {
@@ -97,7 +116,7 @@ class SpecialCollection extends SpecialPage {
 				// TODO
 			}
 			$out->redirect( wfAppendQuery(
-				SkinTemplate::makeSpecialUrl( 'Book' ),
+				SkinComponentUtils::makeSpecialUrl( 'book' ),
 				$request->appendQueryArray( [ 'bookcmd' => rtrim( $par, '/' ) ] )
 			) );
 			return;
@@ -182,7 +201,7 @@ class SpecialCollection extends SpecialPage {
 			case 'clear_collection':
 				CollectionSession::clearCollection();
 				$redirect = $request->getVal( 'return_to', '' );
-				$redirectURL = SkinTemplate::makeSpecialUrl( 'Book' );
+				$redirectURL = SkinComponentUtils::makeSpecialUrl( 'Book' );
 				if ( $redirect !== '' ) {
 					$title = Title::newFromText( $redirect );
 					if ( $title ) {
@@ -197,12 +216,12 @@ class SpecialCollection extends SpecialPage {
 					$request->getText( 'collectionTitle', '' ),
 					$request->getText( 'collectionSubtitle', '' )
 				);
-				$out->redirect( SkinTemplate::makeSpecialUrl( 'Book' ) );
+				$out->redirect( SkinComponentUtils::makeSpecialUrl( 'Book' ) );
 				return;
 
 			case 'sort_items':
 				self::sortItems();
-				$out->redirect( SkinTemplate::makeSpecialUrl( 'Book' ) );
+				$out->redirect( SkinComponentUtils::makeSpecialUrl( 'Book' ) );
 				return;
 
 			case 'add_category':
@@ -219,12 +238,12 @@ class SpecialCollection extends SpecialPage {
 
 			case 'remove_item':
 				self::removeItem( $request->getInt( 'index', 0 ) );
-				$out->redirect( SkinTemplate::makeSpecialUrl( 'Book' ) );
+				$out->redirect( SkinComponentUtils::makeSpecialUrl( 'Book' ) );
 				return;
 
 			case 'move_item':
 				self::moveItem( $request->getInt( 'index', 0 ), $request->getInt( 'delta', 0 ) );
-				$out->redirect( SkinTemplate::makeSpecialUrl( 'Book' ) );
+				$out->redirect( SkinComponentUtils::makeSpecialUrl( 'Book' ) );
 				return;
 
 			case 'load_collection':
@@ -245,7 +264,7 @@ class SpecialCollection extends SpecialPage {
 						CollectionSession::startSession();
 						CollectionSession::setCollection( $collection );
 						CollectionSession::enable();
-						$out->redirect( SkinTemplate::makeSpecialUrl( 'Book' ) );
+						$out->redirect( SkinComponentUtils::makeSpecialUrl( 'Book' ) );
 					}
 					return;
 				}
@@ -390,7 +409,7 @@ class SpecialCollection extends SpecialPage {
 		$user = $this->getUser();
 
 		if ( $request->getVal( 'abort' ) ) {
-			$out->redirect( SkinTemplate::makeSpecialUrl( 'Book' ) );
+			$out->redirect( SkinComponentUtils::makeSpecialUrl( 'Book' ) );
 			return;
 		}
 		if ( !$user->matchEditToken( $request->getVal( 'token' ) ) ) {
@@ -453,7 +472,7 @@ class SpecialCollection extends SpecialPage {
 
 		$form = new FormLayout( [
 			'method' => 'POST',
-			'action' => SkinTemplate::makeSpecialUrl(
+			'action' => SkinComponentUtils::makeSpecialUrl(
 				'Book',
 				[
 					'bookcmd' => 'start_book_creator',
@@ -505,7 +524,7 @@ class SpecialCollection extends SpecialPage {
 
 		$form = new FormLayout( [
 			'method' => 'POST',
-			'action' => SkinTemplate::makeSpecialUrl(
+			'action' => SkinComponentUtils::makeSpecialUrl(
 				'Book',
 				[
 					'bookcmd' => 'stop_book_creator',
@@ -915,6 +934,75 @@ class SpecialCollection extends SpecialPage {
 		CollectionSession::setCollection( $collection );
 	}
 
+	private function getTitles( array $match ): array {
+		$articleTitle = $match[1];
+		$displayTitle = null;
+		if ( isset( $match[3] ) ) {
+			$displayTitle = $match[3];
+		}
+		return [ $articleTitle, $displayTitle ];
+	}
+
+	private function parseArticleLine( string $line ): array | null {
+		$articleTitle = trim( substr( $line, 1 ) );
+		$oldid = null;
+		wfDebugLog("collection", "Matching line: $line");
+
+		if ( preg_match( '/^\[\[:?(.*?)(\|(.*?))?\]\]$/', $articleTitle, $match ) ) {
+			[ $articleTitle, $displayTitle ] = $this->getTitles( $match );
+			wfDebugLog("collection", "Matched local title '$articleTitle', '$displayTitle'");
+			$oldid = 0;
+			$currentVersion = 1;
+		}
+
+		if ( preg_match( '/^\[\{\{fullurl:(.*?)\|oldid=(.*?)\}\}\s+(.*?)\]$/', $articleTitle, $match ) ) {
+			[ $articleTitle, $displayTitle ] = $this->getTitles( $match );
+			wfDebugLog("collection", "Matched oldid title '$articleTitle', '$displayTitle'");
+			$oldid = (int)$match[2];
+			$currentVersion = 0;
+		}
+
+		if ( $oldid === null ) {
+			return null;
+		}
+
+		$articleTitle = Title::newFromText( $articleTitle );
+		if ( !( $articleTitle && $articleTitle->exists() ) ) {
+			return null;
+		}
+
+		if ( !$displayTitle && $this->displayTitleService != null ) {
+			$this->displayTitleService->getDisplayTitle( $articleTitle, $displayTitle );
+		}
+
+		$revision = MediaWikiServices::getInstance()
+			->getRevisionLookup()
+			->getRevisionByTitle( $articleTitle, $oldid );
+		if ( !$revision ) {
+			return null;
+		}
+		$latest = $articleTitle->getLatestRevID();
+
+		if ( !$oldid ) {
+			$oldid = $latest;
+		}
+
+		$d = [
+			'type' => 'article',
+			'content_type' => 'text/x-wiki',
+			'title' => $articleTitle->getPrefixedText(),
+			'latest' => $latest,
+			'revision' => $oldid,
+			'timestamp' => wfTimestamp( TS_UNIX, $revision->getTimestamp() ),
+			'url' => $articleTitle->getCanonicalURL(),
+			'currentVersion' => $currentVersion,
+		];
+		if ( $displayTitle ) {
+			$d['displaytitle'] = $displayTitle;
+		}
+		return $d;
+	}
+
 	/**
 	 * @param array &$collection
 	 * @param string $line
@@ -938,66 +1026,7 @@ class SpecialCollection extends SpecialPage {
 				'title' => trim( substr( $line, 1 ) ),
 			];
 		} elseif ( substr( $line, 0, 1 ) == ':' ) { // article
-			$articleTitle = trim( substr( $line, 1 ) );
-			if ( preg_match( '/^\[\[:?(.*?)(\|(.*?))?\]\]$/', $articleTitle, $match ) ) {
-				$articleTitle = $match[1];
-				if ( isset( $match[3] ) ) {
-					$displayTitle = $match[3];
-				} else {
-					$displayTitle = null;
-				}
-				$oldid = 0;
-				$currentVersion = 1;
-			} elseif (
-				preg_match( '/^\[\{\{fullurl:(.*?)\|oldid=(.*?)\}\}\s+(.*?)\]$/', $articleTitle, $match )
-			) {
-				$articleTitle = $match[1];
-				if ( isset( $match[3] ) ) {
-					$displayTitle = $match[3];
-				} else {
-					$displayTitle = null;
-				}
-				$oldid = (int)$match[2];
-				$currentVersion = 0;
-			} else {
-				return null;
-			}
-
-			$articleTitle = Title::newFromText( $articleTitle );
-			if ( !$articleTitle ) {
-				return null;
-			}
-
-			if ( !$articleTitle->exists() ) {
-				return null;
-			}
-
-			$revision = MediaWikiServices::getInstance()
-				->getRevisionLookup()
-				->getRevisionByTitle( $articleTitle, $oldid );
-			if ( !$revision ) {
-				return null;
-			}
-			$latest = $articleTitle->getLatestRevID();
-
-			if ( !$oldid ) {
-				$oldid = $latest;
-			}
-
-			$d = [
-				'type' => 'article',
-				'content_type' => 'text/x-wiki',
-				'title' => $articleTitle->getPrefixedText(),
-				'latest' => $latest,
-				'revision' => $oldid,
-				'timestamp' => wfTimestamp( TS_UNIX, $revision->getTimestamp() ),
-				'url' => $articleTitle->getCanonicalURL(),
-				'currentVersion' => $currentVersion,
-			];
-			if ( $displayTitle ) {
-				$d['displaytitle'] = $displayTitle;
-			}
-			return $d;
+			return $this->parseArticleLine( $line );
 		}
 		return null;
 	}
@@ -1145,7 +1174,7 @@ class SpecialCollection extends SpecialPage {
 		if ( $response->get( 'is_cached' ) ) {
 			$query .= '&is_cached=1';
 		}
-		$redirect = SkinTemplate::makeSpecialUrl( 'Book', $query );
+		$redirect = SkinComponentUtils::makeSpecialUrl( 'Book', $query );
 		$this->getOutput()->redirect( $redirect );
 	}
 
@@ -1169,7 +1198,7 @@ class SpecialCollection extends SpecialPage {
 		if ( $response->get( 'is_cached' ) ) {
 			$query .= '&is_cached=1';
 		}
-		$this->getOutput()->redirect( SkinTemplate::makeSpecialUrl( 'Book', $query ) );
+		$this->getOutput()->redirect( SkinComponentUtils::makeSpecialUrl( 'Book', $query ) );
 	}
 
 	private function renderRenderingPage() {
@@ -1238,8 +1267,8 @@ class SpecialCollection extends SpecialPage {
 				$template = new CollectionFinishedTemplate();
 				$template->set(
 					'download_url',
-					wfExpandUrl(
-						SkinTemplate::makeSpecialUrl( 'Book', 'bookcmd=download&' . $query ),
+					$this->urlUtils->expand(
+						SkinComponentUtils::makeSpecialUrl( 'Book', 'bookcmd=download&' . $query ),
 						PROTO_CURRENT
 					)
 				);
